@@ -70,7 +70,7 @@ quality_rules:
 freshness:
   measured_at: "publish"  # ingest | cleaned | publish
   sla_hours: 24
-  alert_channel: "__TODO__"
+  alert_channel: "xyz-day10-alerts"
 
 canonical_sources:
   - path: "data/docs/policy_refund_v4.txt"
