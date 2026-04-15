@@ -1,7 +1,7 @@
 # Runbook — Lab Day 10 (incident tối giản)
 
-**Nhóm:** XYZ — Lớp C401  
-**Cập nhật:** 2026-04-15
+**Nhóm:** XYZ 
+**Cập nhật:** 25-04-2026
 
 ---
 
@@ -10,7 +10,7 @@
 Chạy kiểm tra:
 
 ```bash
-python etl_pipeline.py freshness --manifest artifacts/manifests/manifest_clean-leave.json
+python etl_pipeline.py freshness --manifest artifacts/manifests/manifest_sprint2c.json
 ```
 
 ### Các mức freshness
@@ -26,7 +26,7 @@ python etl_pipeline.py freshness --manifest artifacts/manifests/manifest_clean-l
 ```
 freshness_check=FAIL {
   "latest_exported_at": "2026-04-10T08:00:00",
-  "age_hours": 120.226,
+  "age_hours": 120.908,
   "sla_hours": 24.0,
   "reason": "freshness_sla_exceeded"
 }
