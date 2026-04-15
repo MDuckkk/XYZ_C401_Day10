@@ -112,5 +112,68 @@ def run_expectations(cleaned_rows: List[Dict[str, Any]]) -> Tuple[List[Expectati
         )
     )
 
+    # E7: exported_at phải đúng định dạng timestamp export
+    exported_bad = [
+        r
+        for r in cleaned_rows
+        if not re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$", (r.get("exported_at") or "").strip())
+    ]
+    ok7 = len(exported_bad) == 0
+    results.append(
+        ExpectationResult(
+            "exported_at_iso_timestamp",
+            ok7,
+            "halt",
+            f"non_iso_exported_at_rows={len(exported_bad)}",
+        )
+    )
+
+    # E8: chunk_id phải unique để rerun/upsert không tạo duplicate vector
+    ids = [(r.get("chunk_id") or "").strip() for r in cleaned_rows]
+    duplicate_ids = len(ids) - len(set(ids))
+    ok8 = duplicate_ids == 0 and all(ids)
+    results.append(
+        ExpectationResult(
+            "chunk_id_unique_non_empty",
+            ok8,
+            "halt",
+            f"duplicate_or_empty_chunk_ids={0 if ok8 else duplicate_ids or ids.count('')}",
+        )
+    )
+
+    # E9: SLA P1 phải giữ đủ 2 mốc quan trọng 15 phút và 4 giờ trong cleaned dataset
+    sla_p1_rows = [r for r in cleaned_rows if r.get("doc_id") == "sla_p1_2026"]
+    bad_sla_p1 = [
+        r
+        for r in sla_p1_rows
+        if "15 phút" not in (r.get("chunk_text") or "") or "4 giờ" not in (r.get("chunk_text") or "")
+    ]
+    ok9 = len(sla_p1_rows) >= 1 and len(bad_sla_p1) == 0
+    results.append(
+        ExpectationResult(
+            "sla_p1_contains_response_and_resolution_targets",
+            ok9,
+            "halt",
+            f"sla_rows={len(sla_p1_rows)} invalid_rows={len(bad_sla_p1)}",
+        )
+    )
+
+    # E10: FAQ reset password phải giữ ngữ cảnh portal nội bộ sau clean
+    helpdesk_rows = [r for r in cleaned_rows if r.get("doc_id") == "it_helpdesk_faq"]
+    bad_helpdesk = [
+        r
+        for r in helpdesk_rows
+        if "portal self-service" in (r.get("chunk_text") or "") and "nội bộ" not in (r.get("chunk_text") or "")
+    ]
+    ok10 = len(bad_helpdesk) == 0
+    results.append(
+        ExpectationResult(
+            "helpdesk_portal_phrase_internal_context",
+            ok10,
+            "warn",
+            f"rows_missing_internal_context={len(bad_helpdesk)}",
+        )
+    )
+
     halt = any(not r.passed and r.severity == "halt" for r in results)
     return results, halt

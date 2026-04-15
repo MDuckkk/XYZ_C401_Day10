@@ -3,13 +3,16 @@
 
 version: "1.0"
 dataset: "kb_chunk_export"
-owner_team: "__TODO__"
+owner_team: "XYZ"
 
 schema_cleaned:
   chunk_id:
     type: string
     required: true
     description: "ID ổn định sau clean (thường hash hoặc doc_id + seq)"
+    constraints:
+      unique: true
+      min_length: 12
   doc_id:
     type: string
     required: true
@@ -28,10 +31,41 @@ schema_cleaned:
 
 quality_rules:
   - id: "no_duplicate_chunk_text"
+    description: "Quarantine chunk có nội dung trùng sau khi normalize whitespace/case."
     severity: "warn"
+  - id: "doc_id_allowlist_only"
+    description: "Chỉ nhận doc_id nằm trong allowlist của corpus Day 10."
+    severity: "halt"
+  - id: "effective_date_parseable"
+    description: "effective_date phải parse được về YYYY-MM-DD; thiếu hoặc sai format sẽ vào quarantine."
+    severity: "halt"
+  - id: "hr_leave_min_effective_date"
+    description: "Bản HR cũ có effective_date trước ngưỡng canonical sẽ bị quarantine."
+    severity: "halt"
+  - id: "no_empty_chunk_text"
+    description: "Chunk text rỗng không được đi tiếp vào cleaned dataset."
+    severity: "halt"
+  - id: "exported_at_iso_timestamp"
+    description: "exported_at phải đúng định dạng timestamp ISO ở boundary export."
+    severity: "halt"
   - id: "no_stale_refund_window"
     description: "Không được để chunk policy refund chứa cửa sổ 14 ngày (lệch so với v4 = 7 ngày)"
     severity: "halt"
+  - id: "refund_phrase_normalized"
+    description: "Chuẩn hoá cụm refund về 'xác nhận đơn hàng' để thống nhất wording trong index."
+    severity: "warn"
+  - id: "helpdesk_sync_phrase_normalized"
+    description: "Chuẩn hoá câu mô tả đồng bộ trong FAQ helpdesk để tránh wording lệch."
+    severity: "warn"
+  - id: "helpdesk_portal_phrase_normalized"
+    description: "Chuẩn hoá cụm 'portal self-service' về ngữ cảnh portal nội bộ."
+    severity: "warn"
+  - id: "hr_leave_phrase_normalized"
+    description: "Chuẩn hoá diễn đạt annual leave từ '12 ngày phép năm' về '12 ngày/năm'."
+    severity: "warn"
+  - id: "sla_resolution_phrase_normalized"
+    description: "Chuẩn hoá câu SLA P1 về wording 'resolution time trong 4 giờ'."
+    severity: "warn"
 
 freshness:
   measured_at: "publish"  # ingest | cleaned | publish

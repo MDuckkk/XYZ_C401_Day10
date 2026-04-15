@@ -46,6 +46,14 @@ def _log(path: Path, line: str) -> None:
         f.write(line + "\n")
 
 
+def _safe_print(line: str) -> None:
+    try:
+        print(line)
+    except UnicodeEncodeError:
+        encoded = line.encode(sys.stdout.encoding or "utf-8", errors="replace")
+        print(encoded.decode(sys.stdout.encoding or "utf-8", errors="replace"))
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     run_id = args.run_id or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%MZ")
     raw_path = Path(args.raw)
@@ -58,7 +66,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         p.mkdir(parents=True, exist_ok=True)
 
     def log(msg: str) -> None:
-        print(msg)
+        _safe_print(msg)
         _log(log_path, msg)
 
     rows = load_raw_csv(raw_path)
@@ -66,7 +74,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     log(f"run_id={run_id}")
     log(f"raw_records={raw_count}")
 
-    cleaned, quarantine = clean_rows(
+    cleaned, quarantine, clean_stats = clean_rows(
         rows,
         apply_refund_window_fix=not args.no_refund_fix,
     )
@@ -79,6 +87,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     log(f"quarantine_records={len(quarantine)}")
     log(f"cleaned_csv={cleaned_path.relative_to(ROOT)}")
     log(f"quarantine_csv={quar_path.relative_to(ROOT)}")
+    for key, value in sorted(clean_stats.items()):
+        log(f"cleaning_stat[{key}]={value}")
 
     results, halt = run_expectations(cleaned)
     for r in results:
@@ -91,13 +101,18 @@ def cmd_run(args: argparse.Namespace) -> int:
         log("WARN: expectation failed but --skip-validate → tiếp tục embed (chỉ dùng cho demo Sprint 3).")
 
     # Embed
-    embed_ok = cmd_embed_internal(
-        cleaned_path,
-        run_id=run_id,
-        log=log,
-    )
-    if not embed_ok:
-        return 3
+    embed_status = "skipped"
+    if args.skip_embed:
+        log("embed_skipped=true reason=sprint1_or_local_setup")
+    else:
+        embed_ok = cmd_embed_internal(
+            cleaned_path,
+            run_id=run_id,
+            log=log,
+        )
+        if not embed_ok:
+            return 3
+        embed_status = "completed"
 
     latest_exported = ""
     if cleaned:
@@ -110,9 +125,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         "raw_records": raw_count,
         "cleaned_records": len(cleaned),
         "quarantine_records": len(quarantine),
+        "cleaning_stats": clean_stats,
         "latest_exported_at": latest_exported,
         "no_refund_fix": bool(args.no_refund_fix),
         "skipped_validate": bool(args.skip_validate and halt),
+        "skipped_embed": bool(args.skip_embed),
+        "embed_status": embed_status,
         "cleaned_csv": str(cleaned_path.relative_to(ROOT)),
         "chroma_path": os.environ.get("CHROMA_DB_PATH", "./chroma_db"),
         "chroma_collection": os.environ.get("CHROMA_COLLECTION", "day10_kb"),
@@ -204,6 +222,11 @@ def main() -> int:
         "--skip-validate",
         action="store_true",
         help="Vẫn embed khi expectation halt (chỉ phục vụ demo có chủ đích).",
+    )
+    p_run.add_argument(
+        "--skip-embed",
+        action="store_true",
+        help="Bỏ qua bước embed để hoàn thành Sprint 1 hoặc khi máy chưa cài chromadb.",
     )
     p_run.set_defaults(func=cmd_run)
 

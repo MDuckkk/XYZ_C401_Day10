@@ -1,0 +1,30 @@
+{
+  "run_id": "sprint2a",
+  "run_timestamp": "2026-04-15T08:00:29.078373+00:00",
+  "raw_path": "data\\raw\\policy_export_dirty.csv",
+  "raw_records": 10,
+  "cleaned_records": 6,
+  "quarantine_records": 4,
+  "cleaning_stats": {
+    "rows_seen": 10,
+    "unknown_doc_id_quarantined": 1,
+    "missing_effective_date_quarantined": 1,
+    "invalid_effective_date_quarantined": 0,
+    "stale_hr_policy_quarantined": 1,
+    "missing_chunk_text_quarantined": 0,
+    "duplicate_chunk_text_quarantined": 1,
+    "exported_at_normalized": 0,
+    "refund_window_fixed": 1,
+    "refund_phrase_normalized": 1,
+    "helpdesk_sync_phrase_normalized": 1,
+    "hr_leave_phrase_normalized": 1
+  },
+  "latest_exported_at": "2026-04-10T08:00:00",
+  "no_refund_fix": false,
+  "skipped_validate": false,
+  "skipped_embed": false,
+  "embed_status": "completed",
+  "cleaned_csv": "artifacts\\cleaned\\cleaned_sprint2a.csv",
+  "chroma_path": "./chroma_db",
+  "chroma_collection": "day10_kb"
+}
