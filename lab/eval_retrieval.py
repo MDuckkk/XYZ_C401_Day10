@@ -21,6 +21,69 @@ load_dotenv()
 
 ROOT = Path(__file__).resolve().parent
 
+EMBEDDING_BATCH_SIZE = 512
+
+
+# ---------------------------------------------------------------------------
+# Embedding resolution (giống etl_pipeline.py)
+# ---------------------------------------------------------------------------
+
+def _try_sentence_transformer():
+    """Trả về (query_fn, chroma_ef)."""
+    from sentence_transformers import SentenceTransformer
+    from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+
+    model_name = os.environ.get("ST_MODEL", "all-MiniLM-L6-v2")
+    _model = SentenceTransformer(model_name)
+    chroma_ef = SentenceTransformerEmbeddingFunction(model_name=model_name)
+
+    def query_fn(texts: list[str]) -> list[list[float]]:
+        return _model.encode(texts, show_progress_bar=False).tolist()
+
+    print(f"[eval] embed_backend=SentenceTransformer model={model_name}")
+    return query_fn, chroma_ef
+
+
+def _try_openai():
+    """Trả về (query_fn, None)."""
+    from openai import OpenAI
+
+    client = OpenAI()
+    model_name = os.environ.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+    client.embeddings.create(model=model_name, input=["ping"])
+
+    def query_fn(texts: list[str]) -> list[list[float]]:
+        all_emb: list[list[float]] = []
+        for i in range(0, len(texts), EMBEDDING_BATCH_SIZE):
+            batch = texts[i : i + EMBEDDING_BATCH_SIZE]
+            resp = client.embeddings.create(model=model_name, input=batch)
+            all_emb.extend([d.embedding for d in resp.data])
+        return all_emb
+
+    print(f"[eval] embed_backend=OpenAI model={model_name}")
+    return query_fn, None
+
+
+def resolve_embedding():
+    """SentenceTransformer → OpenAI fallback. Returns (query_fn, chroma_ef | None)."""
+    try:
+        return _try_sentence_transformer()
+    except Exception as e:
+        print(f"[eval] SentenceTransformer không khả dụng ({type(e).__name__}: {e}), thử OpenAI...")
+
+    try:
+        return _try_openai()
+    except Exception as e:
+        print(f"[eval] OpenAI cũng thất bại ({type(e).__name__}: {e})", file=sys.stderr)
+        raise RuntimeError(
+            "Không thể khởi tạo embedding backend. "
+            "Cài sentence-transformers hoặc set OPENAI_API_KEY."
+        ) from e
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -39,9 +102,8 @@ def main() -> int:
 
     try:
         import chromadb
-        from chromadb.utils import embedding_functions
     except ImportError:
-        print("Install: pip install chromadb sentence-transformers", file=sys.stderr)
+        print("Install: pip install chromadb", file=sys.stderr)
         return 1
 
     qpath = Path(args.questions)
@@ -49,15 +111,24 @@ def main() -> int:
         print(f"questions not found: {qpath}", file=sys.stderr)
         return 1
 
-    questions = json.loads(qpath.read_text(encoding="utf-8"))
+    questions = json.loads(qpath.read_text(encoding="utf-8-sig"))
     db_path = os.environ.get("CHROMA_DB_PATH", str(ROOT / "chroma_db"))
     collection_name = os.environ.get("CHROMA_COLLECTION", "day10_kb")
-    model_name = os.environ.get("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+
+    # --- Resolve embedding backend ---
+    try:
+        query_fn, chroma_ef = resolve_embedding()
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        return 1
 
     client = chromadb.PersistentClient(path=db_path)
-    emb = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=model_name)
+
     try:
-        col = client.get_collection(name=collection_name, embedding_function=emb)
+        if chroma_ef is not None:
+            col = client.get_collection(name=collection_name, embedding_function=chroma_ef)
+        else:
+            col = client.get_collection(name=collection_name)
     except Exception as e:
         print(f"Collection error: {e}", file=sys.stderr)
         return 2
@@ -80,7 +151,15 @@ def main() -> int:
         w.writeheader()
         for q in questions:
             text = q["question"]
-            res = col.query(query_texts=[text], n_results=args.top_k)
+
+            if chroma_ef is not None:
+                # SentenceTransformer: ChromaDB tự embed query
+                res = col.query(query_texts=[text], n_results=args.top_k)
+            else:
+                # OpenAI: tự embed query rồi truyền query_embeddings
+                q_emb = query_fn([text])
+                res = col.query(query_embeddings=q_emb, n_results=args.top_k)
+
             docs = (res.get("documents") or [[]])[0]
             metas = (res.get("metadatas") or [[]])[0]
             top_doc = (metas[0] or {}).get("doc_id", "") if metas else ""

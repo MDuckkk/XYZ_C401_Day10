@@ -22,6 +22,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from dotenv import load_dotenv
 
@@ -39,6 +40,84 @@ MAN_DIR = ART / "manifests"
 QUAR_DIR = ART / "quarantine"
 CLEAN_DIR = ART / "cleaned"
 
+EMBEDDING_BATCH_SIZE = 512
+
+
+# ---------------------------------------------------------------------------
+# Embedding strategy: SentenceTransformer → OpenAI fallback
+# ---------------------------------------------------------------------------
+
+def _try_sentence_transformer(log: Callable[[str], None]):
+    """Thử khởi tạo SentenceTransformer. Trả về (embed_fn, chroma_ef) hoặc raise."""
+    from sentence_transformers import SentenceTransformer
+    from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+
+    model_name = os.environ.get("ST_MODEL", "all-MiniLM-L6-v2")
+    # Warm-up: load model để chắc chắn tải được
+    _model = SentenceTransformer(model_name)
+
+    chroma_ef = SentenceTransformerEmbeddingFunction(model_name=model_name)
+
+    def embed_fn(texts: list[str]) -> list[list[float]]:
+        return _model.encode(texts, show_progress_bar=False).tolist()
+
+    log(f"embed_backend=SentenceTransformer model={model_name}")
+    return embed_fn, chroma_ef
+
+
+def _try_openai(log: Callable[[str], None]):
+    """Khởi tạo OpenAI embeddings. Trả về (embed_fn, None) — không có chroma_ef."""
+    from openai import OpenAI
+
+    client = OpenAI()  # cần OPENAI_API_KEY trong env
+    model_name = os.environ.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+
+    # Ping nhanh để fail-fast nếu key sai / quota hết
+    client.embeddings.create(model=model_name, input=["ping"])
+
+    def embed_fn(texts: list[str]) -> list[list[float]]:
+        all_emb: list[list[float]] = []
+        for i in range(0, len(texts), EMBEDDING_BATCH_SIZE):
+            batch = texts[i : i + EMBEDDING_BATCH_SIZE]
+            resp = client.embeddings.create(model=model_name, input=batch)
+            all_emb.extend([d.embedding for d in resp.data])
+        return all_emb
+
+    log(f"embed_backend=OpenAI model={model_name}")
+    return embed_fn, None
+
+
+def resolve_embedding_backend(log: Callable[[str], None]):
+    """
+    Thử SentenceTransformer trước, nếu fail (thiếu lib / lỗi model) thì
+    fallback sang OpenAI.
+
+    Returns:
+        (embed_fn, chroma_ef | None)
+        - embed_fn(texts) -> list[list[float]]
+        - chroma_ef: truyền cho get_or_create_collection nếu có,
+          None nếu dùng OpenAI (tự truyền embeddings).
+    """
+    # --- Attempt 1: SentenceTransformer ---
+    try:
+        return _try_sentence_transformer(log)
+    except Exception as e:
+        log(f"INFO: SentenceTransformer không khả dụng ({type(e).__name__}: {e}), thử OpenAI...")
+
+    # --- Attempt 2: OpenAI ---
+    try:
+        return _try_openai(log)
+    except Exception as e:
+        log(f"ERROR: OpenAI embedding cũng thất bại ({type(e).__name__}: {e})")
+        raise RuntimeError(
+            "Không thể khởi tạo embedding backend nào. "
+            "Cài sentence-transformers hoặc set OPENAI_API_KEY."
+        ) from e
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _log(path: Path, line: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -52,7 +131,6 @@ def _safe_print(line: str) -> None:
     except UnicodeEncodeError:
         encoded = line.encode(sys.stdout.encoding or "utf-8", errors="replace")
         print(encoded.decode(sys.stdout.encoding or "utf-8", errors="replace"))
-
 
 def cmd_run(args: argparse.Namespace) -> int:
     run_id = args.run_id or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%MZ")
@@ -149,28 +227,41 @@ def cmd_run(args: argparse.Namespace) -> int:
 def cmd_embed_internal(cleaned_csv: Path, *, run_id: str, log) -> bool:
     try:
         import chromadb
-        from chromadb.utils import embedding_functions
     except ImportError:
         log("ERROR: chromadb chưa cài. pip install -r requirements.txt")
         return False
 
     db_path = os.environ.get("CHROMA_DB_PATH", str(ROOT / "chroma_db"))
     collection_name = os.environ.get("CHROMA_COLLECTION", "day10_kb")
-    model_name = os.environ.get("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 
-    from transform.cleaning_rules import load_raw_csv as load_csv  # same loader
+    from transform.cleaning_rules import load_raw_csv as load_csv
 
     rows = load_csv(cleaned_csv)
     if not rows:
         log("WARN: cleaned CSV rỗng — không embed.")
         return True
 
+    # --- Resolve embedding backend ---
+    try:
+        embed_fn, chroma_ef = resolve_embedding_backend(log)
+    except RuntimeError as e:
+        log(str(e))
+        return False
+
     client = chromadb.PersistentClient(path=db_path)
-    emb = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=model_name)
-    col = client.get_or_create_collection(name=collection_name, embedding_function=emb)
+
+    # Nếu có chroma_ef (SentenceTransformer) → ChromaDB tự embed
+    # Nếu không (OpenAI) → ta truyền embeddings thủ công
+    if chroma_ef is not None:
+        col = client.get_or_create_collection(
+            name=collection_name, embedding_function=chroma_ef
+        )
+    else:
+        col = client.get_or_create_collection(name=collection_name)
 
     ids = [r["chunk_id"] for r in rows]
-    # Tránh “mồi cũ” trong top-k: xóa id không còn trong cleaned run này (index = snapshot publish).
+
+    # Tránh "mồi cũ" trong top-k: xóa id không còn trong cleaned run này
     try:
         prev = col.get(include=[])
         prev_ids = set(prev.get("ids") or [])
@@ -180,6 +271,7 @@ def cmd_embed_internal(cleaned_csv: Path, *, run_id: str, log) -> bool:
             log(f"embed_prune_removed={len(drop)}")
     except Exception as e:
         log(f"WARN: embed prune skip: {e}")
+
     documents = [r["chunk_text"] for r in rows]
     metadatas = [
         {
@@ -189,8 +281,23 @@ def cmd_embed_internal(cleaned_csv: Path, *, run_id: str, log) -> bool:
         }
         for r in rows
     ]
-    # Idempotent: upsert theo chunk_id
-    col.upsert(ids=ids, documents=documents, metadatas=metadatas)
+
+    log(f"embed_start chunks={len(documents)}")
+
+    if chroma_ef is not None:
+        # SentenceTransformer: ChromaDB tự gọi embed qua embedding_function
+        col.upsert(ids=ids, documents=documents, metadatas=metadatas)
+    else:
+        # OpenAI: tự tính embeddings rồi truyền vào
+        try:
+            embeddings = embed_fn(documents)
+        except Exception as e:
+            log(f"ERROR: embedding failed: {e}")
+            return False
+        col.upsert(
+            ids=ids, documents=documents, embeddings=embeddings, metadatas=metadatas
+        )
+
     log(f"embed_upsert count={len(ids)} collection={collection_name}")
     return True
 

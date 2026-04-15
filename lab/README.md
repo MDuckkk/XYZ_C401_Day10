@@ -1,4 +1,4 @@
-# Lab Day 10 — Data Pipeline & Data Observability
+    # Lab Day 10 — Data Pipeline & Data Observability
 
 **Môn:** AI in Action (AICB-P1)  
 **Chủ đề:** ETL / cleaning / expectation suite / embed / freshness / before-after evidence  
@@ -120,7 +120,53 @@ python etl_pipeline.py run --run-id inject-bad --no-refund-fix --skip-validate
 python eval_retrieval.py --out artifacts/eval/after_inject_bad.csv
 # So sánh với file eval sau khi chạy lại pipeline chuẩn (không flag inject)
 ```
+## Kết quả & Phân tích
 
+### q_refund_window là câu hỏi duy nhất bị ảnh hưởng
+- Khi chạy với `--no-refund-fix`, chunk refund giữ dữ liệu cũ từ **policy-v3 (14 ngày)** thay vì giá trị đúng **7 ngày**
+- `contains_expected = yes` (vì có keyword *"hoàn tiền"*)
+- `hits_forbidden = yes` → chỉ ra nội dung sai vẫn tồn tại  
+
+→ Đây là **false positive nguy hiểm**: retrieval có vẻ đúng nếu chỉ nhìn surface metric, nhưng thực chất nội dung sai
+
+---
+
+### Các câu khác (SLA P1, lockout, leave policy)
+- Không bị ảnh hưởng  
+- Vì flag `--no-refund-fix` chỉ tác động riêng logic refund  
+
+---
+
+## Bài học rút ra
+
+### Surface metric không đủ
+- `contains_expected` có thể gây hiểu nhầm chất lượng retrieval  
+- Cần kiểm tra thêm `hits_forbidden`  
+
+---
+
+### Data quality gate là bắt buộc
+Nếu không dùng `--skip-validate`, pipeline sẽ:
+- Phát hiện sai lệch expectation  
+- **Halt trước khi embed dữ liệu bẩn**  
+
+---
+
+### Inject test giúp lộ lỗi nguy hiểm nhất
+- Chatbot trả lời sai nhưng hệ thống vẫn “pass”  
+- Đây là failure mode cần được chặn ở **pipeline**, không phải ở runtime  
+
+---
+
+## Kết luận
+
+**Sprint 3 chứng minh:**
+
+> Không có validation gate = có thể embed dữ liệu sai mà không bị phát hiện
+
+### Do đó:
+- Luôn bật validation trong production  
+- Dùng inject test như một cách kiểm thử độ “kháng lỗi” của pipeline  
 **Grading (sau 17:00):**
 
 ```bash
