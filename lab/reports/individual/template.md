@@ -1,60 +1,41 @@
-# Báo Cáo Cá Nhân — Lab Day 10: Data Pipeline & Observability
+# Báo cáo cá nhân — mẫu GV (reference)
 
-**Họ và tên:** ___________  
-**Vai trò:** Ingestion / Cleaning / Embed / Monitoring — ___________  
-**Ngày nộp:** ___________  
-**Độ dài yêu cầu:** **400–650 từ** (ngắn hơn Day 09 vì rubric slide cá nhân ~10% — vẫn phải đủ bằng chứng)
-
----
-
-> Viết **"tôi"**, đính kèm **run_id**, **tên file**, **đoạn log** hoặc **dòng CSV** thật.  
-> Nếu làm phần clean/expectation: nêu **một số liệu thay đổi** (vd `quarantine_records`, `hits_forbidden`, `top1_doc_expected`) khớp bảng `metric_impact` của nhóm.  
-> Lưu: `reports/individual/[ten_ban].md`
+**Họ và tên:** GV Reference  
+**Vai trò:** Cleaning & Quality  
+**Độ dài:** ~450 từ (mẫu)
 
 ---
 
-## 1. Tôi phụ trách phần nào? (80–120 từ)
+## 1. Phụ trách
 
-**File / module:**
+Tôi triển khai `transform/cleaning_rules.py` (rule 7–9) và `quality/expectations.py` (E7–E9). Kết nối với embed owner qua manifest `cleaned_csv` và log `cleaned_records`.
 
-- …
-
-**Kết nối với thành viên khác:**
-
-_________________
-
-**Bằng chứng (commit / comment trong code):**
-
-_________________
+**Bằng chứng:** commit/file trong repo reference `day10-lab-reference-solution`.
 
 ---
 
-## 2. Một quyết định kỹ thuật (100–150 từ)
+## 2. Quyết định kỹ thuật
 
-> VD: chọn halt vs warn, chiến lược idempotency, cách đo freshness, format quarantine.
+**Halt vs warn:** `exported_at` sai format → **quarantine + cleaning** (không để vào cleaned) thay vì warn, vì sai clock làm sai freshness downstream. Còn `exported_at` rỗng trên cleaned → **warn** (E9): vẫn cho publish nhưng log để backlog.
 
-_________________
-
----
-
-## 3. Một lỗi hoặc anomaly đã xử lý (100–150 từ)
-
-> Mô tả triệu chứng → metric/check nào phát hiện → fix.
-
-_________________
+**Idempotency:** ủng hộ prune vector id không còn trong batch — tránh top-k còn “14 ngày” sau inject.
 
 ---
 
-## 4. Bằng chứng trước / sau (80–120 từ)
+## 3. Sự cố / anomaly
 
-> Dán ngắn 2 dòng từ `before_after_eval.csv` hoặc tương đương; ghi rõ `run_id`.
-
-_________________
+Khi thử bỏ prune, `grading_run.jsonl` báo `hits_forbidden=true` dù cleaned đã sạch — nguyên nhân vector cũ. Fix: prune trong `etl_pipeline.py` sau khi so sánh `prev_ids` vs `ids`.
 
 ---
 
-## 5. Cải tiến tiếp theo (40–80 từ)
+## 4. Before/after
 
-> Nếu có thêm 2 giờ — một việc cụ thể (không chung chung).
+**Log:** `expectation[refund_no_stale_14d_window] OK (halt)` sau run chuẩn; trước đó với `--no-refund-fix` expectation FAIL.
 
-_________________
+**CSV:** dòng `q_refund_window` có `hits_forbidden=no` trong `artifacts/eval/before_after_eval.csv`.
+
+---
+
+## 5. Cải tiến thêm 2 giờ
+
+Đọc cutoff HR `2026-01-01` từ `contracts/data_contract.yaml` thay vì hard-code trong Python (hướng Distinction d).
